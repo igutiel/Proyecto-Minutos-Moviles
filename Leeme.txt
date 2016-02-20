@@ -1,0 +1,7 @@
+Proyecto para Entel
+Tasación Fija
+Descuento en Minutos Móviles
+
+- Como recuperar los tráficos móviles de la Tasación
+- Dejar las llamadas en monto 0
+- Pastilla temporal
