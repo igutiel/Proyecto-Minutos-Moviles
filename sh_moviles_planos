@@ -1,0 +1,74 @@
+#!/bin/bash
+
+if [ $# != 1 ]
+then
+	echo 'Sintaxis '$0' ciclo'
+	exit 1
+fi
+
+echo 'Inicio Marca moviles en '$0' '$1' para Pack Duo:' `date '+%d/%m/%Y %H:%M:%S'`
+PASSWORD=`cat $ARBORDIR/.arborpw`
+
+sqlplus $ARBORDBU/$PASSWORD <<EOF
+set heading off
+drop table cdr_data_moviles;
+create table cdr_data_moviles tablespace cust_cdr_data as
+select distinct cd.account_no, cd.trans_id, cd.trans_dt, cd.primary_units
+from emf
+join cdr_data cd on
+    cd.account_no = emf.account_no
+and cd.subscr_no = emf.subscr_no
+and cd.subscr_no_resets = emf.subscr_no_resets 
+join (select account_no
+      from emf
+      where emf.equip_type_code = 8300
+        and emf.equip_status != -2
+      group by emf.account_no
+      having count(1) = 1) tmp  on
+    tmp.account_no = emf.account_no
+join (select ciclo, max(fecha_corte) as fecha_corte
+      from ci_param_fact group by ciclo) tmf on
+    tmf.ciclo = '$1'    
+where emf.equip_type_code = 8300
+  and emf.equip_status != -2
+  and cd.type_id_usg in (14, 15)
+  and cd.no_bill = 0
+  and cd.trans_dt < to_date(tmf.fecha_corte, 'yyyymmdd');
+create index idx_moviles on cdr_data_moviles(trans_id) tablespace cust_cdr_data_idx;
+create index idx_moviles_cuenta on cdr_data_moviles(account_no, trans_dt) tablespace cust_cdr_data_idx;  
+drop table ci_minutos_cuenta_moviles;
+create table ci_minutos_cuenta_moviles as
+select cmc.account_no
+      ,decode(cmc.units_free, 1000 * 60, 100 * 60, 2000 * 60, 300 * 60) as units_free
+      ,count(1) as llamadas
+from cdr_data_moviles cdm
+join ci_minutos_cuenta cmc on
+    cmc.account_no = cdm.account_no
+where cmc.units_free in (1000 * 60, 2000 * 60)    
+group by cmc.account_no
+        ,decode(cmc.units_free, 1000 * 60, 100 * 60, 2000 * 60, 300 * 60);
+create index idx_min_ctas_mov on ci_minutos_cuenta_moviles(account_no);
+delete cdr_data_moviles
+where account_no not in (select account_no from ci_minutos_cuenta_moviles);
+drop table cdr_data_paralelo;
+create table cdr_data_paralelo tablespace cust_cdr_data as
+select cd.*
+from cdr_data cd
+join cdr_data_moviles cdm on
+    cd.trans_id = cdm.trans_id
+order by cd.account_no
+        ,cd.trans_dt desc;
+create index idx_data_paralelo on cdr_data_paralelo(trans_id) tablespace cust_cdr_data_idx;
+quit
+EOF
+
+sqlplus $ARBORDBU/$PASSWORD <<EOF
+alter procedure CI_UPDATE_MOVILES COMPILE;
+set SERVEROUTPUT ON
+
+EXECUTE CI_UPDATE_MOVILES;
+
+set SERVEROUTPUT OFF
+EOF
+
+echo 'Fin Marca moviles en '$0' '$1' para Pack Duo:' `date '+%d/%m/%Y %H:%M:%S'`
